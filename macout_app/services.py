@@ -10,6 +10,9 @@ import time
 import zipfile
 import base64
 import pkgutil
+import pwd
+import tempfile
+import subprocess
 from datetime import datetime, timedelta
 
 from . import core
@@ -37,6 +40,47 @@ def data_dir():
     return d
 
 
+def desktop_identity():
+    """The invoking desktop user, validated against the local passwd database."""
+    if os.geteuid() == 0 and os.environ.get("SUDO_USER"):
+        user = pwd.getpwnam(os.environ["SUDO_USER"])
+        if str(user.pw_uid) != os.environ.get("SUDO_UID") or str(user.pw_gid) != os.environ.get("SUDO_GID"):
+            raise ValueError("Sudo user identity does not match the local account")
+        return user
+    return pwd.getpwuid(os.getuid())
+
+
+def export_folder():
+    user = desktop_identity()
+    downloads = os.path.join(user.pw_dir, "Downloads")
+    return downloads if os.path.isdir(downloads) else user.pw_dir
+
+
+def open_export(path, folder=False):
+    """Open with the desktop user's identity, never launch a browser as root."""
+    user = desktop_identity()
+    target = os.path.dirname(os.path.abspath(path)) if folder else os.path.abspath(path)
+    env = dict(os.environ, HOME=user.pw_dir, USER=user.pw_name, LOGNAME=user.pw_name)
+    argv = ["xdg-open", target]
+    if os.geteuid() == 0 and user.pw_uid != 0:
+        env["XDG_RUNTIME_DIR"] = "/run/user/%d" % user.pw_uid
+        env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=" + env["XDG_RUNTIME_DIR"] + "/bus"
+        # No preexec_fn: this runs in a threaded GTK application.
+        runuser = core.find_tool("runuser")
+        if not runuser:
+            raise OSError("runuser is missing; open the saved report with your file manager")
+        argv = [runuser, "-u", user.pw_name, "--", "env"]
+        for key in ("HOME", "USER", "LOGNAME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"):
+            argv.append(key + "=" + env[key])
+        argv += ["xdg-open", target]
+    elif os.geteuid() == 0:
+        raise ValueError("No invoking desktop user. Open the saved report manually.")
+    result = subprocess.run(argv, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, timeout=15)
+    if result.returncode:
+        raise OSError(result.stderr.strip() or "Desktop opener could not open the saved file")
+
+
 def _read_json(path, default):
     try:
         with open(path) as f:
@@ -55,7 +99,7 @@ def _write_json(path, obj):
 
 # ------------------------------------------------------------------ settings
 DEFAULT_SETTINGS = {
-    "theme": "system", "startup_page": "Dashboard", "notifications": True,
+    "theme": "dark", "startup_page": "Dashboard", "notifications": True,
     "verbosity": "Normal", "log_retention_days": 30, "history_retention_days": 90,
     "redact_ip_local": True, "redact_ip_public": True, "redact_bssid": True, "redact_ssid": True,
     "redact_perm_mac": True, "redact_cur_mac": True, "include_system": False,
@@ -69,6 +113,9 @@ class Settings:
         self.path = os.path.join(base, "settings.json")
         self.data = dict(DEFAULT_SETTINGS)
         self.data.update(_read_json(self.path, {}))
+        # One-time migration: new default applies to existing 1.0 installs too.
+        if not self.data.get("dark_default_v11"):
+            self.data.update(theme="dark", dark_default_v11=True)
 
     def get(self, k):
         return self.data.get(k, DEFAULT_SETTINGS.get(k))
@@ -467,7 +514,7 @@ class MacManager:
                 if mode == "permanent":
                     res["requested"] = observed
                 res["verified"] = True
-                self.log.emit("MAC", "MAC change successful: %s -> %s (verified)" % (old, observed), iface=iface)
+                self.log.emit("MAC", "MAC change successful: %s -> %s (verified)" % (core.format_mac(old, self.oui.lookup), core.format_mac(observed, self.oui.lookup)), iface=iface)
                 self.log.emit("NETWORK", "Interface restored", iface=iface)
                 rec = {"seconds": None}
                 if reconnect:
@@ -527,13 +574,12 @@ class MacManager:
             self.log.emit("DHCP", "No address after %ds" % timeout, "WARNING", iface=iface)
         return {"seconds": secs, "failed": failed}
 
-    @staticmethod
-    def _summary(old, new, before, after, rec):
+    def _summary(self, old, new, before, after, rec):
         lines = []
         if old == new:
-            lines.append("MAC unchanged (%s)." % new)
+            lines.append("MAC unchanged (%s)." % core.format_mac(new, self.oui.lookup))
         else:
-            lines.append("MAC changed from %s to %s and verified." % (old, new))
+            lines.append("MAC changed from %s to %s and verified." % (core.format_mac(old, self.oui.lookup), core.format_mac(new, self.oui.lookup)))
         if rec.get("seconds") is not None:
             if rec.get("failed"):
                 lines.append("MAC changed successfully, but the interface did not get an address back within %.0f seconds." % rec["seconds"])
@@ -960,6 +1006,12 @@ class Redactor:
         s = IPV4_RE.sub(ip4, s)
         def ip6(m):
             v = m.group(0)
+            # Timestamps such as 18:34:31 are not IPv6 addresses.
+            import ipaddress
+            try:
+                ipaddress.ip_interface(v)
+            except ValueError:
+                return v
             if MAC_RE.fullmatch(v):
                 return v
             local = v.lower().startswith(("fe80", "fd", "fc", "::1"))
@@ -1029,6 +1081,15 @@ class ReportGenerator:
                 if s["wifi"].get("ssid"):
                     known["ssid"].add(s["wifi"]["ssid"])
         r = Redactor(opts, known)
+        # Machine fields stay raw, display fields use bracketed vendor info.
+        for snap in data["interfaces"]:
+            snap["mac_display"] = core.format_mac(snap.get("mac"), self.m.oui.lookup)
+            snap["permanent_display"] = core.format_mac(snap.get("permanent"), self.m.oui.lookup)
+        for op in data["operations"]:
+            for k in ("old_mac", "new_mac"):
+                op[k + "_display"] = core.format_mac(op.get(k), self.m.oui.lookup)
+        for ev in data["timeline"]:
+            ev["message"] = core.annotate_macs(ev["message"], self.m.oui.lookup)
         return r.walk(data)
 
     # ---- renderers
@@ -1039,14 +1100,14 @@ class ReportGenerator:
         for k, v in d["system"].items():
             L.append("  %s: %s" % (k, v))
         for s in d["interfaces"]:
-            L += ["", "INTERFACE %s (%s)" % (s["iface"], s["type"]), "  MAC: %s" % s["mac"], "  Permanent MAC: %s" % (s.get("permanent") or "not available"),
+            L += ["", "INTERFACE %s (%s)" % (s["iface"], s["type"]), "  MAC: %s" % s.get("mac_display", s["mac"]), "  Permanent MAC: %s" % (s.get("permanent") or "not available"),
                   "  State: %s / %s" % (s["state"], s["association"]), "  IPv4: %s" % (", ".join(s["ipv4"]) or "none"),
                   "  IPv6: %s" % (", ".join(s["ipv6"]) or "none"), "  Gateway: %s" % (s.get("gateway") or "none"),
                   "  DHCP: %s" % s["dhcp"], "  DNS test: %s" % s.get("dns"), "  IPv4 Internet: %s" % s.get("internet_v4")]
             if s.get("wifi"):
                 L.append("  Wi-Fi: SSID %s, BSSID %s, signal %s" % (s["wifi"].get("ssid"), s["wifi"].get("bssid"), s["wifi"].get("signal")))
         L += ["", "SUMMARY"] + ["  %s: %s" % kv for kv in d["summary"].items()]
-        L += ["", "OPERATIONS"] + ["  %s  %s  %s -> %s  %s  %s" % (o.get("time"), o.get("iface"), o.get("old_mac"), o.get("new_mac"), o.get("operation"), o.get("result")) for o in d["operations"]]
+        L += ["", "OPERATIONS"] + ["  %s  %s  %s -> %s  %s  %s" % (o.get("time"), o.get("iface"), o.get("old_mac_display", o.get("old_mac")), o.get("new_mac_display", o.get("new_mac")), o.get("operation"), o.get("result")) for o in d["operations"]]
         L += ["", "TIMELINE"] + ["  %s  %-8s %s" % (e["time"][11:], e["category"], e["message"]) for e in d["timeline"]]
         if d["warnings"]:
             L += ["", "WARNINGS"] + ["  " + w for w in d["warnings"]]
@@ -1079,14 +1140,14 @@ class ReportGenerator:
             w = s.get("wifi")
             rows += ("<div class='card'><h3>%s <span class='tag'>%s</span></h3><table>" % (esc(s["iface"]), esc(s["type"])) +
                      "".join("<tr><td>%s</td><td>%s</td></tr>" % (esc(k), esc(v)) for k, v in [
-                         ("Current MAC", s["mac"]), ("Permanent MAC", s.get("permanent") or "not available"),
+                         ("Current MAC", s.get("mac_display", s["mac"])), ("Permanent MAC", s.get("permanent_display") or "not available"),
                          ("State", "%s, %s" % (s["state"], s["association"])), ("IPv4", ", ".join(s["ipv4"]) or "none"),
                          ("IPv6", ", ".join(s["ipv6"]) or "none"), ("Gateway", s.get("gateway") or "none"), ("DHCP", s["dhcp"]),
                          ("DNS test", "OK" if s.get("dns") else "Failed"), ("IPv4 Internet", "OK" if s.get("internet_v4") else "Failed")] +
                          ([("Wi-Fi", "SSID %s / BSSID %s / %s dBm" % (w.get("ssid"), w.get("bssid"), w.get("signal")))] if w else [])) +
                      "</table></div>")
         ops = "".join("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" % tuple(
-            esc(o.get(k, "")) for k in ("time", "iface", "old_mac", "new_mac", "operation", "result")) for o in d["operations"])
+            esc(o.get(k + "_display", o.get(k, ""))) for k in ("time", "iface", "old_mac", "new_mac", "operation", "result")) for o in d["operations"])
         tl = "".join("<div class='ev'><span class='t'>%s</span><span class='c c-%s'>%s</span>%s</div>" % (
             esc(e["time"][11:]), esc(e["category"]), esc(e["category"]), esc(e["message"])) for e in d["timeline"])
         logo = self.logo_data_uri()
@@ -1125,16 +1186,30 @@ td:first-child{color:#5b6778;width:160px}
         data = self.redact(self.collect(ifaces, opts), opts)
         data["redaction"] = redaction_summary(opts)
         renderers = {"txt": self.to_txt, "json": lambda d: json.dumps(d, indent=2), "csv": self.to_csv, "html": self.to_html}
-        if fmt == "zip":
-            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
-                for k, fn in renderers.items():
-                    z.writestr("macout-report." + k, fn(data))
-        elif fmt in renderers:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w") as f:
-                f.write(renderers[fmt](data))
-        else:
+        if fmt not in renderers and fmt != "zip":
             raise ValueError("Unknown format %s" % fmt)
+        path = os.path.abspath(os.path.expanduser(path))
+        user = desktop_identity()
+        # Render before touching the destination. A failed export must not destroy an old report.
+        payloads = {k: fn(data) for k, fn in renderers.items()} if fmt == "zip" else {fmt: renderers[fmt](data)}
+        fd, tmp = tempfile.mkstemp(prefix=".macout-export-", dir=os.path.dirname(path))
+        try:
+            with os.fdopen(fd, "wb") as f:
+                if fmt == "zip":
+                    with zipfile.ZipFile(f, "w", zipfile.ZIP_DEFLATED) as z:
+                        for k, text in payloads.items():
+                            z.writestr("macout-report." + k, text)
+                else:
+                    f.write(payloads[fmt].encode("utf-8"))
+                f.flush()
+                os.fsync(f.fileno())
+                os.fchmod(f.fileno(), 0o600)
+                if os.geteuid() == 0:
+                    os.fchown(f.fileno(), user.pw_uid, user.pw_gid)
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
         self.log.emit("SYSTEM", "Report exported: %s" % os.path.basename(path))
         return path
 

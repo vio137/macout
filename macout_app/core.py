@@ -5,7 +5,7 @@ import random
 import re
 import shutil
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 APP_NAME = "MAC-OUT"
 TAGLINE = "MAC Address Management & Network Identity Observatory"
 
@@ -75,6 +75,31 @@ def mac_from_oui(oui, rng=random):
     return mac
 
 
+def vendor_candidates(ouis, count=12, rng=random):
+    """Synthetic unicast candidates across assigned prefixes, not real device identities."""
+    prefixes = sorted(set(ouis))
+    valid = []
+    for oui in prefixes:
+        try:
+            test = mac_from_oui(oui, rng)
+            if not is_locally_administered(test):
+                valid.append(oui)
+        except MacError:
+            continue
+    if not valid:
+        raise MacError("This vendor has no usable globally administered unicast prefixes")
+    result = []
+    for i in range(count):
+        for attempt in range(100):
+            mac = mac_from_oui(valid[i % len(valid)], rng)
+            if mac not in result:
+                result.append(mac)
+                break
+        else:
+            raise MacError("Could not generate unique candidates")
+    return result
+
+
 def mac_from_pattern(pattern, rng=random):
     """Pattern like 02:xx:xx:aa:xx:xx where x is a random hex digit."""
     p = pattern.strip().lower().replace("-", ":")
@@ -86,6 +111,27 @@ def mac_from_pattern(pattern, rng=random):
     if is_multicast(mac):
         raise MacError("Pattern produces a multicast address (first byte must be even)")
     return mac
+
+
+def format_mac(mac, vendor_lookup=None):
+    if not mac:
+        return ""
+    try:
+        normalized = normalize_mac(mac)
+    except MacError:
+        return str(mac)
+    vendor = vendor_lookup(normalized) if vendor_lookup else None
+    if is_locally_administered(normalized):
+        suffix = "locally administered" + ("; prefix matches " + vendor if vendor else "")
+    else:
+        suffix = vendor or ""
+    return normalized + (" (" + suffix + ")" if suffix else "")
+
+
+def annotate_macs(text, vendor_lookup):
+    # Only display prose. Stored addresses and command arguments remain raw.
+    return re.sub(r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b(?! \()",
+                  lambda m: format_mac(m.group(0), vendor_lookup), str(text))
 
 
 def describe_mac(mac, vendor_lookup=None):
@@ -126,7 +172,7 @@ class OuiDatabase:
                 if m:
                     self.map["%s:%s:%s" % (m.group(1).upper(), m.group(2).upper(), m.group(3).upper())] = m.group(4).strip()
                     continue
-                m = re.match(r"^([0-9A-Fa-f]{6})\s+\(base 16\)\s+(.+)$", line)  # ieee-data
+                m = re.match(r"^([0-9A-Fa-f]{6})\s+(?:\(base 16\)\s+)?(.+)$", line)  # ieee-data
                 if m:
                     h = m.group(1).upper()
                     self.map["%s:%s:%s" % (h[0:2], h[2:4], h[4:6])] = m.group(2).strip()

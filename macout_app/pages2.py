@@ -160,6 +160,8 @@ class Pages2:
     def file_dialog(self, title, save, name=""):
         d = Gtk.FileChooserDialog(title=title, parent=self, action=Gtk.FileChooserAction.SAVE if save else Gtk.FileChooserAction.OPEN)
         d.add_buttons("Cancel", Gtk.ResponseType.CANCEL, "Save" if save else "Open", Gtk.ResponseType.OK)
+        d.set_current_folder(services.export_folder())
+        d.set_local_only(True)
         if save:
             d.set_current_name(name)
             d.set_do_overwrite_confirmation(True)
@@ -259,7 +261,7 @@ class Pages2:
         self.rot_hist.clear()
         for h in reversed(self.app.history.all()):
             if "Rotation" in str(h.get("operation")):
-                self.rot_hist.append([h.get("time", ""), h.get("iface", ""), h.get("old_mac") or "", h.get("new_mac") or "", (h.get("result") or "")[:60]])
+                self.rot_hist.append([h.get("time", ""), h.get("iface", ""), self.display_mac(h.get("old_mac")), self.display_mac(h.get("new_mac")), (h.get("result") or "")[:60]])
             if len(self.rot_hist) >= 50:
                 break
 

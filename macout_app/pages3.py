@@ -39,7 +39,7 @@ class Pages3:
             return
         w = s.get("wifi") or {}
         l2 = card("Layer 2")
-        rows = [("Link", s["state"]), ("Association", s["association"]), ("MAC", s["mac"])]
+        rows = [("Link", s["state"]), ("Association", s["association"]), ("MAC", self.display_mac(s["mac"]))]
         if s.get("wifi") is not None:
             rows += [("SSID", w.get("ssid") or "n/a"), ("BSSID", w.get("bssid") or "n/a"),
                      ("Signal", ("%s dBm" % w["signal"]) if w.get("signal") is not None else "n/a")]
@@ -70,7 +70,7 @@ class Pages3:
         for title, s in (("BEFORE", r["before"]), ("AFTER", r["after"])):
             col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
             col.pack_start(label(title, "section"), False, False, 0)
-            col.pack_start(kvgrid([("MAC", s["mac"]), ("Association", s["association"]), ("DHCP", s["dhcp"]), ("IPv4", ", ".join(s["ipv4"]) or "none"),
+            col.pack_start(kvgrid([("MAC", self.display_mac(s["mac"])), ("Association", s["association"]), ("DHCP", s["dhcp"]), ("IPv4", ", ".join(s["ipv4"]) or "none"),
                                    ("Gateway", s.get("gateway") or "none"), ("DNS", self.yn(s.get("dns"))), ("Internet", self.yn(s.get("internet_v4")))],
                                   mono=("MAC",)), False, False, 0)
             row.pack_start(col, False, False, 0)
@@ -174,7 +174,7 @@ class Pages3:
         self.h_store.clear()
         rows = self.history_rows()
         for r in reversed(rows):
-            self.h_store.append([r.get("time", ""), r.get("iface", ""), r.get("old_mac") or "", r.get("new_mac") or "", r.get("profile", ""),
+            self.h_store.append([r.get("time", ""), r.get("iface", ""), self.display_mac(r.get("old_mac")), self.display_mac(r.get("new_mac")), r.get("profile", ""),
                                  r.get("operation", ""), (r.get("result") or "")[:70], "%ss" % r.get("duration", "")])
         self.h_count.set_text("%d entries. Retention: %s days (Settings > Privacy)." % (len(rows), self.app.settings.get("history_retention_days")))
 
@@ -233,7 +233,7 @@ class Pages3:
         self.l_store.clear()
         cat = self.l_cat.get_active_text()
         for r in self.app.log.visible(None if cat in (None, "All categories") else cat)[-500:]:
-            self.l_store.append([r["time"], r["level"], r["category"], r.get("iface") or "", r["message"]])
+            self.l_store.append([r["time"], r["level"], r["category"], r.get("iface") or "", self.display_text(r["message"])])
 
     # ---- Reports
     def build_reports(self, box):
@@ -260,7 +260,16 @@ class Pages3:
         r.pack_start(self.rp_fmt, False, False, 0)
         r.pack_start(button("Export report...", self.export_report, "suggested-action"), False, False, 0)
         ec.pack_start(r, False, False, 0)
-        self.rp_msg = label("", "key", wrap=True, selectable=True)
+        self.rp_export_btn = r.get_children()[-1]
+        self.rp_msg = label("Choose a format, then save to your Downloads folder or another location.", "key", wrap=True, selectable=True)
+        self.last_export = None
+        actions = Gtk.Box(spacing=8)
+        self.rp_open_btn = button("Open report", lambda: self.open_report(False))
+        self.rp_folder_btn = button("Show folder", lambda: self.open_report(True))
+        for btn in (self.rp_open_btn, self.rp_folder_btn):
+            btn.set_sensitive(False)
+            actions.pack_start(btn, False, False, 0)
+        ec.pack_start(actions, False, False, 0)
         ec.pack_start(self.rp_msg, False, False, 0)
         ec.pack_start(label("ZIP contains all four other formats. The report covers all interfaces.", "key"), False, False, 0)
         box.pack_start(ec, False, False, 0)
@@ -273,17 +282,44 @@ class Pages3:
     def update_redaction_text(self):
         self.rp_text.set_text(services.redaction_summary(self.rp_opts()))
 
+    def open_report(self, folder=False):
+        if not self.last_export:
+            return
+        def done(r, err):
+            if err:
+                self.rp_msg.set_text("Saved: %s\nCould not open automatically: %s\nOpen the saved file from your file manager." % (self.last_export, err))
+        self.bg(lambda: services.open_export(self.last_export, folder), done)
+
     def export_report(self, path=None):
         fmt = self.rp_fmt.get_active_text().lower()
-        p = path or self.file_dialog("Export report", True, "macout-report." + fmt)
-        if not p:
+        try:
+            p = path or self.file_dialog("Export report", True, "macout-report." + fmt)
+            if not p:
+                return
+            if not p.lower().endswith("." + fmt):
+                p += "." + fmt
+                import os
+                if os.path.exists(p) and not self.confirm("Replace existing report?", p):
+                    return
+            opts = self.rp_opts()
+            self.app.settings.data.update(opts)
+            self.app.settings.save()
+        except Exception as err:
+            self.rp_msg.set_text("Export failed: %s" % err)
             return
-        opts = self.rp_opts()
-        self.app.settings.data.update(opts)
-        self.app.settings.save()
-        self.rp_msg.set_text("Generating...")
+        self.rp_export_btn.set_sensitive(False)
+        self.rp_open_btn.set_sensitive(False)
+        self.rp_folder_btn.set_sensitive(False)
+        self.rp_msg.set_text("Generating %s report. Checking all interfaces; this can take a few seconds..." % fmt.upper())
         def done(r, err):
-            self.rp_msg.set_text(("Saved: %s\n%s" % (p, services.redaction_summary(opts))) if not err else "Export failed: %s" % err)
+            self.rp_export_btn.set_sensitive(True)
+            if err:
+                self.rp_msg.set_text("Export failed: %s\nChoose a writable folder and try again." % err)
+            else:
+                self.last_export = r
+                self.rp_open_btn.set_sensitive(True)
+                self.rp_folder_btn.set_sensitive(True)
+                self.rp_msg.set_text("Saved: %s\nOwned by your desktop user, private to that user.\n%s" % (r, services.redaction_summary(opts)))
         self.bg(lambda: self.app.reports.export(fmt, p, opts=opts), done)
 
     # ---- Settings

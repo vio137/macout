@@ -23,3 +23,7 @@ remembers the first MAC it ever saw on that interface and restores to that.
 **Persistence without NetworkManager does not survive reconnects.** Correct. The systemd unit only runs at boot.
 
 **macchanger asks about boot-time changes during install.** Answer No. MAC-OUT handles changes itself.
+
+### Report says permission denied or cannot be found
+
+Version 1.0.0 could create root-owned private reports when launched with sudo and start the save dialog in root's folders. Update to 1.1.0, then export again to your own Downloads folder. New reports are 0600 and owned by the validated SUDO_USER. We do not make diagnostic reports world-readable. Open report uses your desktop identity; if your desktop's xdg-open association is missing or its session cannot be reached, the saved path is shown so you can open it with your file manager.

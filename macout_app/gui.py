@@ -36,7 +36,7 @@ class MacOutWindow(Pages1, Pages2, Pages3, Gtk.Window):
         hb = Gtk.HeaderBar()
         hb.set_show_close_button(True)
         hb.set_title("MAC-OUT")
-        hb.set_subtitle(core.TAGLINE)
+        hb.set_subtitle("Network Identity Observatory")
         self.set_titlebar(hb)
         self.iface_combo = Gtk.ComboBoxText()
         self.iface_combo.set_tooltip_text("Interface that MAC Control, Rotation and Observer act on")
@@ -71,7 +71,11 @@ class MacOutWindow(Pages1, Pages2, Pages3, Gtk.Window):
         lg = Gtk.Image.new_from_pixbuf(logo_pixbuf(96))
         lg.set_halign(Gtk.Align.CENTER)
         lg.set_tooltip_text("Maulana Abul Kalam Azad University of Technology, West Bengal")
-        side.pack_end(lg, False, False, 10)
+        logo_frame = Gtk.Box()
+        logo_frame.get_style_context().add_class("logo-frame")
+        logo_frame.set_halign(Gtk.Align.CENTER)
+        logo_frame.pack_start(lg, False, False, 0)
+        side.pack_end(logo_frame, False, False, 10)
         outer.pack_start(side, False, False, 0)
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
@@ -95,6 +99,12 @@ class MacOutWindow(Pages1, Pages2, Pages3, Gtk.Window):
         self.show_all()
         if not app.settings.get("first_run_done"):
             GLib.idle_add(self.first_run)
+
+    def display_mac(self, mac):
+        return core.format_mac(mac, self.app.manager.oui.lookup)
+
+    def display_text(self, text):
+        return core.annotate_macs(text, self.app.manager.oui.lookup)
 
     # ---- infrastructure
     def apply_theme(self, mode):
@@ -200,7 +210,7 @@ class MacOutWindow(Pages1, Pages2, Pages3, Gtk.Window):
         return h, {"HEALTHY": "ok", "DEGRADED": "warn", "DOWN": "bad", "UNKNOWN": "off"}[h]
 
     def set_status(self, text):
-        self.get_titlebar().set_subtitle(text or core.TAGLINE)
+        self.get_titlebar().set_subtitle(text or "Network Identity Observatory")
 
     def run_op(self, fn):
         if self.busy:
@@ -226,7 +236,7 @@ class MacOutWindow(Pages1, Pages2, Pages3, Gtk.Window):
     # ---- live events and polling
     def on_event(self, rec):
         for ls in (self.tl_store, self.tl_dash):
-            ls.append([rec["time"][11:], rec["category"], rec["message"], CAT_COLORS.get(rec["category"], "#667085")])
+            ls.append([rec["time"][11:], rec["category"], self.display_text(rec["message"]), CAT_COLORS.get(rec["category"], "#667085")])
             if len(ls) > 400:
                 ls.remove(ls.get_iter_first())
         self.refresh_logs_if_visible()

@@ -10,6 +10,7 @@ PAGES = ["Dashboard", "Interfaces", "MAC Control", "Profiles", "Rotation", "Netw
          "Diagnostics", "History", "Logs", "Reports", "Settings", "About"]
 
 CSS_COMMON = """
+.logo-frame { background: #ffffff; padding: 8px; border-radius: 10px; }
 * { font-family: "Inter", "Noto Sans", "DejaVu Sans", sans-serif; }
 .sidebar { padding: 10px 8px; }
 .sidebar row { padding: 9px 14px; border-radius: 8px; margin: 1px 0; }
@@ -36,7 +37,7 @@ window, .page { background: #f3f5f9; color: #1b2430; }
 .sidebar row:selected { background: #2a62d6; color: #ffffff; }
 .sidebar row:selected label { color: #ffffff; }
 .sidebar row:hover:not(:selected) { background: #eef2f9; }
-.sidebar label { color: #1b2430; }
+.sidebar label, treeview header button label, .table-header { color: #1b2430; }
 .sidebar .brandsub { color: #5b6778; }
 .brandsub, .subtitle, .key { color: #5b6778; }
 .card { background: #ffffff; border: 1px solid #e1e6ef; }
@@ -63,7 +64,7 @@ window, .page { background: #11151c; color: #e6eaf2; }
 .sidebar row:selected { background: #3b78f0; color: #ffffff; }
 .sidebar row:selected label { color: #ffffff; }
 .sidebar row:hover:not(:selected) { background: #1e2530; }
-.sidebar label { color: #e6eaf2; }
+.sidebar label, treeview header button label, .table-header { color: #e6eaf2; }
 .sidebar .brandsub { color: #98a3b5; }
 .brandsub, .subtitle, .key { color: #98a3b5; }
 .card { background: #1a2029; border: 1px solid #28303d; }
@@ -114,7 +115,7 @@ def kvgrid(rows, mono=()):
     g = Gtk.Grid(column_spacing=18, row_spacing=5)
     for i, (k, v) in enumerate(rows):
         g.attach(label(k, "key"), 0, i, 1, 1)
-        g.attach(label(str(v), "mono" if k in mono else "", selectable=True), 1, i, 1, 1)
+        g.attach(label(str(v), "mono" if k in mono else "", wrap=True, selectable=True), 1, i, 1, 1)
     return g
 
 
@@ -143,7 +144,7 @@ def button(text, cb, kind=None, tip=None):
 
 def scrolled(child):
     s = Gtk.ScrolledWindow()
-    s.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    s.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
     s.add(child)
     return s
 

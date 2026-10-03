@@ -34,3 +34,19 @@
 ./macout --check
 sudo ./macout --apply-persistent    # used by the systemd unit at boot
 ```
+
+## 1.1.0: vendor series and reports
+
+On MAC Control, search for a vendor and select it on the left. Twelve synthetic MAC candidates appear on the right, covering its usable known prefixes. Select the exact MAC to apply, or choose Generate new series. These are generated addresses, not a list of real devices. A known vendor is shown in brackets beside observed MACs; locally administered values are labeled separately.
+
+Reports now save privately as your invoking desktop user even under sudo. Save to Downloads or another folder you can access. Use Open report or Show folder after export. Re-export any report made by 1.0.0: older files may still be root-owned, and the update deliberately does not change their permissions.
+
+To use your own vendor text file without bundling it, launch with an absolute path:
+
+```sh
+sudo env MACOUT_OUI=/absolute/path/mac-vendor.txt ./macout
+```
+
+Supported lines: `001122 Vendor name`, macchanger's `00 11 22 Vendor name`, or IEEE's `001122 (base 16) Vendor name`. The user-suggested gist at https://gist.github.com/aallan/b4bb86db86079509e6159810ae9bd3e4 contains prefixes rather than device MACs; it is not bundled because its license was not clear.
+
+The first 1.1.0 launch sets the dark theme. Subsequent choices are saved; Light remains available.

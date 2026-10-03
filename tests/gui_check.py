@@ -62,7 +62,7 @@ check("multicast MAC flagged live", "multicast" in win.mac_hint.get_text(), win.
 win.mac_entry.set_text("02:11:22:33:44:55"); pump(0.2)
 win.apply_manual(); idle()
 check("specific MAC applied and verified", mac() == "02:11:22:33:44:55" and win.last_result["verified"], mac())
-check("MAC info card refreshed", "02:11:22:33:44:55" in "".join(c.get_text() for c in win.mc_info.get_children()[1].get_children() if hasattr(c, "get_text")))
+check("MAC info card refreshed", wait(lambda: "02:11:22:33:44:55" in "".join(c.get_text() for c in win.mc_info.get_children()[1].get_children() if hasattr(c, "get_text")), 5))
 
 # locally administered
 win.do_apply("local", {}); idle()
@@ -74,7 +74,7 @@ check("vendor search lists results", len(win.vendor_store) > 0, len(win.vendor_s
 win.vendor_tv.get_selection().select_path(Gtk.TreePath.new_first()); pump(0.2)
 win.vendor_generate(); pump(0.2)
 cand = win.vendor_candidate
-check("vendor preview generated", cand and cand.startswith(win.vendor_pick[0].lower()), cand)
+check("vendor preview generated", cand and core.oui_of(cand) in win.vendor_prefixes[win.vendor_pick[1]], cand)
 win.vendor_apply(); idle()
 check("vendor MAC applied", mac() == cand, mac())
 shot("b-mac-control-vendor")

@@ -12,7 +12,7 @@ really happened, watches what the network does afterwards, and keeps a record yo
 
 - Lists interfaces with current MAC, permanent MAC (when the driver exposes it), state, IPs, gateway,
   Wi-Fi SSID/BSSID/signal, NetworkManager state.
-- Randomize, locally administered, vendor-specific (searchable OUI list), specific MAC, restore.
+- Randomize, locally administered, vendor-specific (searchable vendor list with 12 selectable synthetic MAC candidates), specific MAC, restore.
 - Every change is request, execute, read back, compare. If the interface reports a different MAC than
   requested, MAC-OUT restores the old one and says so.
 - After a change: renews DHCP, waits for the address to come back, runs DNS and Internet checks, and
@@ -80,3 +80,9 @@ python3 -W ignore -m unittest discover -s tests
 The core logic runs against a mock backend. `tests/run_gui_demo.sh` runs the real GUI and real
 `macchanger` on a dummy interface inside a private user and network namespace, so no real network card
 is touched.
+
+### Updated in 1.1.0
+
+Dark by default, selectable vendor MAC series, vendor labels beside displayed addresses, and sudo-safe report exports with desktop-user ownership. See CHANGELOG.md and USAGE.md. The source launcher needs the whole project next to it; for a single-file download use the release asset `macout` built from `dist/macout`.
+
+Release 1.1.0 screenshot set: all 12 dark-themed pages rendered from the shipped zipapp on Ubuntu GTK/Xvfb. Functional report/vendor screenshots are also included.

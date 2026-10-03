@@ -66,7 +66,7 @@ class Pages1:
             c.pack_start(pill("● " + s["association"].upper(), "ok" if s["association"] == "Connected" else ("warn" if s["up"] else "off")), False, False, 0)
             c.pack_start(pill("● NETWORK " + h, k), False, False, 0)
             st = self.app.rotation.status(n)
-            c.pack_start(kvgrid([("Current MAC", s["mac"]), ("Permanent MAC", s.get("permanent") or "not exposed by driver"),
+            c.pack_start(kvgrid([("Current MAC", self.display_mac(s["mac"])), ("Permanent MAC", self.display_mac(s.get("permanent")) or "not exposed by driver"),
                                  ("IPv4", ", ".join(s["ipv4"]) or "none"), ("Gateway", s.get("gateway") or "none"),
                                  ("Profile", self.app.profiles.active_for(n) or "none"),
                                  ("Rotation", ("every %d min, ACTIVE" % st["interval_min"]) if st else "off")],
@@ -86,8 +86,8 @@ class Pages1:
         clear(self.if_list)
         for n, s in self.snaps.items():
             c = card("%s  (%s)" % (n, s["type"]))
-            rows = [("State", "%s, %s" % (s["state"], s["association"])), ("Current MAC", s["mac"]),
-                    ("Permanent MAC", s.get("permanent") or "not exposed by driver"),
+            rows = [("State", "%s, %s" % (s["state"], s["association"])), ("Current MAC", self.display_mac(s["mac"])),
+                    ("Permanent MAC", self.display_mac(s.get("permanent")) or "not exposed by driver"),
                     ("IPv4", ", ".join(s["ipv4"]) or "none"), ("IPv6", ", ".join(s["ipv6"]) or "none"),
                     ("Gateway", s.get("gateway") or "none"), ("NetworkManager", s["nm"]),
                     ("Active profile", self.app.profiles.active_for(n) or "none")]
@@ -108,7 +108,9 @@ class Pages1:
     def build_mac_control(self, box):
         box.pack_start(heading("MAC Control", "Change, verify and restore the MAC of the selected interface. Every change is verified by reading the address back."), False, False, 0)
         self.mc_info = card("Current identity")
-        box.pack_start(self.mc_info, False, False, 0)
+        detail = Gtk.Expander(label="Current identity details")
+        detail.add(self.mc_info)
+        box.pack_start(detail, False, False, 0)
         ops = card("Operations")
         r1 = Gtk.Box(spacing=8)
         r1.pack_start(button("Randomize", lambda: self.do_apply("random", {}), "suggested-action", "macchanger -r"), False, False, 0)
@@ -139,16 +141,50 @@ class Pages1:
         self.vendor_store = Gtk.ListStore(str, str, int)
         tv = Gtk.TreeView(model=self.vendor_store)
         for i, t in enumerate(("OUI", "Vendor", "Known prefixes")):
-            tv.append_column(Gtk.TreeViewColumn(t, Gtk.CellRendererText(), text=i))
+            col = Gtk.TreeViewColumn(t, Gtk.CellRendererText(), text=i)
+            title_widget = label(t, "table-header")
+            col.set_widget(title_widget)
+            title_widget.show()
+            tv.append_column(col)
         tv.get_selection().connect("changed", self.on_vendor_select)
         self.vendor_tv = tv
+        tv.set_headers_visible(False)
+        self.candidate_header = label("MAC candidates                         OUI", "section")
         sw = scrolled(tv)
-        sw.set_min_content_height(150)
-        ops.pack_start(sw, False, False, 0)
+        sw.set_min_content_height(160)
+        sw.set_max_content_height(160)
+        sw.set_vexpand(True)
+        self.candidate_store = Gtk.ListStore(str, str)
+        self.candidate_tv = Gtk.TreeView(model=self.candidate_store)
+        for i, title in enumerate(("Selectable MAC address", "OUI")):
+            col = Gtk.TreeViewColumn(title, Gtk.CellRendererText(), text=i)
+            title_widget = label(title, "table-header")
+            col.set_widget(title_widget)
+            title_widget.show()
+            self.candidate_tv.append_column(col)
+        self.candidate_tv.get_selection().connect("changed", self.on_candidate_select)
+        csw = scrolled(self.candidate_tv)
+        csw.set_min_content_height(160)
+        csw.set_max_content_height(160)
+        picker = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        self.candidate_tv.set_headers_visible(False)
+        left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        left.pack_start(label("VENDOR / FIRST OUI / PREFIX COUNT", "section"), False, False, 0)
+        left.pack_start(sw, True, True, 0)
+        right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        right.pack_start(self.candidate_header, False, False, 0)
+        right.pack_start(csw, True, True, 0)
+        picker.pack1(left, True, False)
+        picker.pack2(right, True, False)
+        picker.set_position(440)
+        ops.pack_start(picker, False, False, 0)
         r4 = Gtk.Box(spacing=8)
-        r4.pack_start(button("Generate preview", self.vendor_generate), False, False, 0)
-        r4.pack_start(button("Apply vendor MAC", self.vendor_apply, "suggested-action"), False, False, 0)
+        r4.pack_start(button("Generate new series", self.vendor_generate), False, False, 0)
+        self.vendor_apply_btn = button("Apply selected MAC", self.vendor_apply, "suggested-action")
+        self.vendor_apply_btn.set_sensitive(False)
+        r4.pack_start(self.vendor_apply_btn, False, False, 0)
         ops.pack_start(r4, False, False, 0)
+        ops.pack_start(label("Choose a vendor on the left, then a MAC on the right. Synthetic addresses use the vendor's assigned prefixes; they are not known devices. Use only on networks you own or are authorized to test.", "key", wrap=True), False, False, 0)
         ops.pack_start(label("Persistence", "section"), False, False, 4)
         self.persist_label = label("", "subtitle", wrap=True)
         ops.pack_start(self.persist_label, False, False, 0)
@@ -173,8 +209,8 @@ class Pages1:
         else:
             d = core.describe_mac(s["mac"], self.app.manager.oui.lookup)
             orig = self.app.manager.original_mac(self.iface)
-            rows = [("Interface", "%s (%s)" % (self.iface, s["type"])), ("Current MAC", d["mac"]),
-                    ("Permanent MAC", s.get("permanent") or "not exposed by driver (MAC-OUT remembers the first MAC it saw: %s)" % (orig or "none yet")),
+            rows = [("Interface", "%s (%s)" % (self.iface, s["type"])), ("Current MAC", self.display_mac(d["mac"])),
+                    ("Permanent MAC", self.display_mac(s.get("permanent")) or "not exposed by driver (MAC-OUT remembers the first MAC it saw: %s)" % (orig or "none yet")),
                     ("Type", d["cast"]), ("Administration", d["administration"]), ("OUI", d["oui"]), ("Vendor", d["vendor"])]
             self.mc_info.pack_start(kvgrid(rows, mono=("Current MAC", "OUI")), False, False, 0)
             if s["type"] not in ("Wi-Fi", "Ethernet", "Dummy"):
@@ -209,33 +245,58 @@ class Pages1:
             return
         self.do_apply("fixed", {"mac": m})
 
+    def clear_candidates(self):
+        self.vendor_candidate = None
+        self.candidate_store.clear()
+        self.vendor_apply_btn.set_sensitive(False)
+
     def on_vendor_search(self, entry):
+        self.vendor_pick = None
+        self.clear_candidates()
         self.vendor_store.clear()
+        self.vendor_preview.set_text("Choose a vendor")
         db = self.app.manager.oui
         if not len(db):
-            self.vendor_preview.set_text("No vendor database found (install macchanger or ieee-data).")
+            self.vendor_preview.set_text("Install macchanger or ieee-data for vendor prefixes")
             return
         seen = {}
-        for oui, name in db.search(entry.get_text(), 800):
+        for oui, name in db.search(entry.get_text(), len(db)):
             seen.setdefault(name, []).append(oui)
-        for name, ouis in list(seen.items())[:80]:
+        self.vendor_prefixes = seen
+        for name, ouis in list(seen.items())[:200]:
             self.vendor_store.append([ouis[0], name, len(ouis)])
 
     def on_vendor_select(self, sel):
         m, it = sel.get_selected()
-        self.vendor_pick = (m[it][0], m[it][1]) if it else None
+        self.vendor_pick = (m[it][0], m[it][1]) if it is not None else None
+        self.clear_candidates()
+        if self.vendor_pick:
+            self.vendor_generate()
+        else:
+            self.vendor_preview.set_text("Choose a vendor")
+
+    def on_candidate_select(self, sel):
+        m, it = sel.get_selected()
+        self.vendor_candidate = m[it][0] if it is not None else None
+        self.vendor_apply_btn.set_sensitive(bool(self.vendor_candidate))
+        self.vendor_preview.set_text("Selected: " + self.display_mac(self.vendor_candidate) if self.vendor_candidate else "Select a MAC from the series")
 
     def vendor_generate(self):
+        self.clear_candidates()
         if not self.vendor_pick:
-            self.vendor_preview.set_text("Select a vendor first")
+            self.vendor_preview.set_text("Choose a vendor first")
             return
-        self.vendor_candidate = core.mac_from_oui(self.vendor_pick[0])
-        self.vendor_preview.set_text("Preview: " + self.vendor_candidate)
+        try:
+            candidates = core.vendor_candidates(self.vendor_prefixes[self.vendor_pick[1]])
+        except MacError as e:
+            self.vendor_preview.set_text(str(e))
+            return
+        for mac in candidates:
+            self.candidate_store.append([mac, core.oui_of(mac)])
+        self.candidate_tv.get_selection().select_path(Gtk.TreePath.new_first())
 
     def vendor_apply(self):
-        if not self.vendor_candidate:
-            self.vendor_generate()
-        if self.vendor_candidate:
+        if self.vendor_pick and self.vendor_candidate:
             self.do_apply("fixed", {"mac": self.vendor_candidate}, "Vendor-specific (%s)" % self.vendor_pick[1])
 
     def persist_on(self):
